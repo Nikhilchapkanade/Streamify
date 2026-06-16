@@ -3,6 +3,10 @@ import { Audio } from 'expo-av';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppState, AppStateStatus } from 'react-native';
 
+import { isTrackCached, getLocalUri, cacheTrack } from '../utils/CacheManager';
+import { fetchSkipSegments, getSkipTimestamp, SponsorBlockSegment } from '../services/SponsorBlockService';
+import { searchYouTubeMusic, resolveAudioStream } from '../services/YouTubeService';
+
 // --- Types ---
 export type Track = {
   id: string;
@@ -11,6 +15,7 @@ export type Track = {
   thumbnail: string;
   stream_url: string;
   duration?: number;
+  yt_video_id?: string;
 };
 
 export type Playlist = {
@@ -88,6 +93,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [recentlyPlayed, setRecentlyPlayed] = useState<Track[]>([]);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
 
+  // SponsorBlock State
+  const [skipSegments, setSkipSegments] = useState<SponsorBlockSegment[]>([]);
+  const skipSegmentsRef = useRef<SponsorBlockSegment[]>([]);
+
+  useEffect(() => {
+    skipSegmentsRef.current = skipSegments;
+  }, [skipSegments]);
+
   // --- Load persisted data + restore session ---
   useEffect(() => {
     const loadData = async () => {
@@ -156,14 +169,24 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   // --- Playback status callback ---
   const onPlaybackStatusUpdate = useCallback((status: any) => {
     if (status.isLoaded) {
-      setPosition(status.positionMillis / 1000);
+      const currentPos = status.positionMillis / 1000;
+      
+      // SponsorBlock Check
+      const skipTo = getSkipTimestamp(currentPos, skipSegmentsRef.current);
+      if (skipTo !== -1 && soundRef.current) {
+        soundRef.current.setPositionAsync(skipTo * 1000);
+        setPosition(skipTo);
+        return;
+      }
+
+      setPosition(currentPos);
       setDuration(status.durationMillis ? status.durationMillis / 1000 : 0);
       setIsPlaying(status.isPlaying);
       if (status.didJustFinish && !status.isLooping) {
         handleTrackFinished();
       }
     }
-  }, []);
+  }, [handleTrackFinished]);
 
   const handleTrackFinished = useCallback(async () => {
     if (repeatMode === 'one') {
@@ -191,7 +214,54 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         await soundRef.current.unloadAsync();
         soundRef.current = null;
       }
-      if (!track.stream_url) throw new Error('No stream URL');
+
+      const activeTrack = { ...track };
+      let finalStreamUrl = activeTrack.stream_url;
+      let finalVideoId = activeTrack.yt_video_id;
+
+      // 1. Resolve YouTube stream url if not present (e.g. Spotify tracks)
+      if (!finalStreamUrl) {
+        console.log(`[YouTube] Resolving stream for: ${activeTrack.title} - ${activeTrack.artist}`);
+        const ytMatch = await searchYouTubeMusic(`${activeTrack.title} ${activeTrack.artist}`);
+        if (ytMatch) {
+          finalVideoId = ytMatch.videoId;
+          activeTrack.yt_video_id = ytMatch.videoId;
+          activeTrack.duration = ytMatch.duration;
+          
+          const directUrl = await resolveAudioStream(ytMatch.videoId);
+          if (directUrl) {
+            finalStreamUrl = directUrl;
+            activeTrack.stream_url = directUrl;
+          }
+        }
+      }
+
+      if (!finalStreamUrl) {
+        throw new Error('Could not resolve playable stream URL');
+      }
+
+      // Fetch SponsorBlock skip segments in the background
+      setSkipSegments([]);
+      if (finalVideoId) {
+        fetchSkipSegments(finalVideoId).then(segments => {
+          setSkipSegments(segments);
+        }).catch(err => console.warn('[SponsorBlock] Fetch error:', err));
+      }
+
+      // 2. Check offline caching
+      let playableUrl = finalStreamUrl;
+      try {
+        const isCached = await isTrackCached(activeTrack.id);
+        if (isCached) {
+          playableUrl = getLocalUri(activeTrack.id);
+          console.log(`[Cache] Playing from cached file: ${playableUrl}`);
+        } else {
+          console.log(`[Cache] Streaming and downloading in background...`);
+          cacheTrack(activeTrack.id, finalStreamUrl).catch(e => console.warn('[Cache] Background caching failed:', e));
+        }
+      } catch (cacheError) {
+        console.warn('[Cache] Offline cache check failed, streaming directly:', cacheError);
+      }
 
       await Audio.setAudioModeAsync({
         playsInSilentModeIOS: true,
@@ -199,15 +269,15 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       });
 
       const { sound } = await Audio.Sound.createAsync(
-        { uri: track.stream_url },
+        { uri: playableUrl },
         { shouldPlay: true },
         onPlaybackStatusUpdate
       );
 
       soundRef.current = sound;
-      setCurrentTrack(track);
+      setCurrentTrack(activeTrack);
       setIsPlaying(true);
-      addToRecentlyPlayed(track);
+      addToRecentlyPlayed(activeTrack);
     } catch (error) {
       console.error('Error playing song:', error);
     } finally {

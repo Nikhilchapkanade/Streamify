@@ -6,6 +6,7 @@ import 'react-native-reanimated';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { PlayerProvider } from '@/context/PlayerContext';
 import { AuthProvider } from '@/context/AuthContext';
+import { SpotifyProvider } from '@/context/SpotifyContext';
 import { useFonts, PlusJakartaSans_800ExtraBold, PlusJakartaSans_800ExtraBold_Italic } from '@expo-google-fonts/plus-jakarta-sans';
 import { Inter_400Regular, Inter_500Medium, Inter_700Bold } from '@expo-google-fonts/inter';
 import * as SplashScreen from 'expo-splash-screen';
@@ -38,20 +39,23 @@ export default function RootLayout() {
 
   return (
     <AuthProvider>
-      <PlayerProvider>
-        <ThemeProvider value={DarkTheme}>
-          <Stack>
-            <Stack.Screen name="(auth)" options={{ headerShown: false }} />
-            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-            <Stack.Screen name="artist/[name]" options={{ headerShown: false }} />
-          <Stack.Screen name="playlist/[id]" options={{ headerShown: false }} />
-          <Stack.Screen name="queue" options={{ headerShown: false, presentation: 'modal' }} />
-          <Stack.Screen name="profile" options={{ headerShown: false }} />
-          <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-        </Stack>
-        <StatusBar style="light" />
-        </ThemeProvider>
-      </PlayerProvider>
+      <SpotifyProvider>
+        <PlayerProvider>
+          <ThemeProvider value={DarkTheme}>
+            <Stack>
+              <Stack.Screen name="(auth)" options={{ headerShown: false }} />
+              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+              <Stack.Screen name="artist/[name]" options={{ headerShown: false }} />
+              <Stack.Screen name="playlist/[id]" options={{ headerShown: false }} />
+              <Stack.Screen name="queue" options={{ headerShown: false, presentation: 'modal' }} />
+              <Stack.Screen name="lyrics" options={{ headerShown: false, presentation: 'modal' }} />
+              <Stack.Screen name="profile" options={{ headerShown: false }} />
+              <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+            </Stack>
+            <StatusBar style="light" />
+          </ThemeProvider>
+        </PlayerProvider>
+      </SpotifyProvider>
     </AuthProvider>
   );
 }
